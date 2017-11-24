@@ -1,0 +1,197 @@
+---
+title: 'Practical Machine Learning: Course Project'
+author: "Talha Mahmood Chaudhry"
+date: "11/15/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width=7, fig.height=4, warning=FALSE, message=FALSE)
+```
+
+## Introduction
+
+This paper aims to predict which movement has been performed using machine learning algorithms in R. Using devices such as *Fitbit* and *Jawbone Up* among others, large amounts of data can be collected regarding movement and exercise. While most of the emphasis is on the quantity of movements, the quality ("how well they do it") is often ignored. In this paper an attempt is made to determine whether the correct movement can be predicted. Six participants, wearing accelerometers on the belt, forearm, arm, and dumbbell, were asked to perform barbell movements correctly and incorrectly in five different ways. Further information can be attained [here](http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har). (See section Weight Lifting Exercise Data set)  
+  
+### Data
+
+The training data set used to build the model is available [here](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv). While the testing data set can be downloaded from [here](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv).
+
+The following libraries are required in R to perform this analysis and model construction:
+```{r rpackages}
+##
+# load required packages
+##
+library(caret); library(plyr); library(tidyverse); library(ggplot2); library(rattle); library(randomForest); library(rpart); library(rpart.plot)
+```
+
+The following commands will download the data into the working directory and read them onto variables in R.
+```{r data_down, cache=TRUE}
+##
+# Ensure that the required data files are present in working directory
+##
+if (!dir.exists("./data")) {
+  dir.create("./data")
+}
+if (!file.exists("./data/pml-training.csv")) {
+  download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", 
+                "./data/pml-training.csv")
+}
+if (!file.exists("./data/pml-testing.csv")) {
+  download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", 
+                "./data/pml-testing.csv")
+}
+```
+
+```{r rdata, cache=TRUE}
+## 
+# Read data to elements training and testing 
+##
+training <- read.csv("./data/pml-training.csv", header = TRUE, row.names = 1, na.strings = c("NA", "", "#DIV/0!"))
+testing <- read.csv("./data/pml-testing.csv", header = TRUE, row.names = 1, na.strings = c("NA", "", "#DIV/0!"))
+```
+
+## Preprocessing data
+  
+Firstly, the first six features in the data are unnecessary for our model building as they include  various time-stamps and participant names, hence they are removed from our variables (both training and testing data set). Secondly, feature that have **near zero variance** are also eliminated. The reason being that with almost zero variability these features don't have any significant effects on the outcome feature (type of movement). Lastly, any features that have more than 60% of **NA** values have also been removed. Feature with such large proportion of NA values contribute little to our model building and will unnecessarily obfuscate our predictions if included.   
+
+```{r prepdat, cache=TRUE}
+##
+# Remove the first six columns as unnecessary
+##
+training <- training %>% dplyr::select(-c(1:6))
+testing <-  testing %>% dplyr::select(-c(1:6))
+##
+# Remove variables that have nearly zero variance
+##
+nzvvar <- nearZeroVar(training)
+training <- training %>% dplyr::select(-nzvvar)
+testing <- testing %>% dplyr::select(-nzvvar)
+##
+# Remove columns with more than 60% of NA observations
+##
+NAcols <- sapply(training, function(x) (sum(is.na(x))) / nrow(training) <= 0.6)
+training <- training %>% dplyr::select(which(NAcols))
+testing <- testing %>% dplyr::select(which(NAcols))
+##
+features <- dim(training)[2]
+```
+This leaves us with a data set of `r features`.
+  
+### Splitting the Data
+
+```{r data_part, cache=TRUE}
+##
+# set the seed
+##
+set.seed(102585)
+##
+# Create training and validation set from the processed data set
+##
+inTrain <- createDataPartition(training$classe, p = 0.6, list = FALSE)
+mytraining <- training[inTrain, ]
+mycrossval <- training[-inTrain, ]
+```
+
+Our training data set is now split into **mytraining** and **mycrossval**. Basically, a 60-40 percent split for the training set and a cross-validation set. This will allow us to build models on the split training set and validate them on the cross-validation set. (Be sure to set the seed for reproducibility)
+  
+
+## Model Construction and Selection
+
+The aim is to build a model with outcome as the **classe** variable against all other variables. The classe variable is a classification feature referring to the five various movements, A, B, C, D or E. Since, this is a classification problem the popular choices by conventional wisdom for model selection are: Regression Tree, Generalized Boosting Method and Random Forest. All three models are constructed and applied to the validation set. The best model is then applied to the final testing set with the missing classe variable.
+  
+### Regression Tree Model
+
+Now we set the seed for reproduciblity and build a _Regression Tree_ model.
+```{r cltree, cache=TRUE}
+##
+# Reset seet
+##
+set.seed(081817)
+##
+# Now build a regression tree model from mytraining variable "classe" against 
+# all other variables
+##
+modfit_rpart <- rpart(classe ~ ., data = mytraining, method = "class")
+```
+ Next we plot the tree dendogram and apply it to the validation set.
+```{r comp_cltree, cache=TRUE}
+##
+# Construct decision tree diagram
+##
+fancyRpartPlot(modfit_rpart, sub = "Decision Tree Analysis: A, B, C, D or E?")
+##
+# Predict and compare the model's response against the validation set
+##
+confusionMatrix(predict(modfit_rpart, mycrossval, type = "class"), mycrossval$classe)
+```
+The accuracy for the model is 73.94%, thus the out-of-sample error is 26.06%. The results are not too bad but perhaps other models will fare better. As some features still possess some NA values, the regression tree method finds it difficult to account for them.
+  
+### Generalized Boosting Method
+  
+Now lets build a model using the Generalized Boosting Method or **gbm**.  
+```{r gbm, cache=TRUE}
+##
+# Now build a generalized boosting model from mytraining variable "classe" 
+# all other variablesagainst 
+##
+mycontrols <- trainControl(method = "repeatedcv", number = 5) # reduce computing time
+modfit_gbm <- train(classe ~ ., data = mytraining, method = "gbm", trControl = mycontrols, verbose = FALSE)
+```
+The reason that we have given custom Controls, is to reduce the computational time, and since our data is not that complex nor a great deal is lost on accuracy.
+```{r comp_gbm, cache=TRUE}
+##
+# Plot the model accuracy againgst iterations
+##
+plot(modfit_gbm)
+##
+# Predict and compare the model's response against the validation set
+##
+confusionMatrix(predict(modfit_gbm, mycrossval), mycrossval$classe)
+```
+This method does exceedingly well. The accuracy is 95.92%, with error rate being 4.08%. 
+  
+### Random Forest
+
+Here is how a Random Forest model is constructed:
+```{r randfor, cache=TRUE}
+##
+# Now build a random forest model from mytraining variable "classe" against 
+# all other variables
+##
+modfit_rf <- randomForest(classe ~ ., data = mytraining)
+```
+
+```{r comp_randfor, cache=TRUE}
+##
+# Plot the error rate of model against no. of trees
+##
+plot(modfit_rf)
+##
+# Predict and compare the model's response against the validation set
+##
+confusionMatrix(predict(modfit_rf, mycrossval, type = "class"), mycrossval$classe)
+```
+ With the random forest method we get the highest accuracy, 99.25%, and the least sample error, 0.75%.
+ 
+   
+## Conclusion
+  
+Random Forest method does far better at determining the outcome than the other methods. Since it builds a subset of independent predictors at each split, and assigns weights with averaging the accuracy achieved is pretty high. Thus, we use it as our final model and apply it to the testing data set.
+```{r evaltestdat, cache=TRUE}
+##
+# Now use best model, modfit_rf, to evalute 'classe' variable  on testing data
+##
+predict(modfit_rf, testing, type = "class")
+```
+
+These are the model's predictions. The following code writes them to a text file for easy viewing.
+```{r txtfile, cache=TRUE}
+##
+# write txt file for predictions of testing set
+#
+DFanswers <- as_tibble(predict(modfit_rf, testing, type = "class"))
+colnames(DFanswers)[1] <- "Predictions"
+DFanswers <- rownames_to_column(DFanswers, var = "Problem ID#")
+write.table(DFanswers, file = "Predictions.txt", quote = FALSE, row.names = FALSE)
+```
